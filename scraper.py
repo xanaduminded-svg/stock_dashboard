@@ -13,10 +13,14 @@ def get_taiwan_time():
     return datetime.now(tz)
 
 def main():
-    # 1. Read the monitoring list
     print(f"Reading {MONITORING_LIST_FILE}...")
     try:
-        df_list = pd.read_csv(MONITORING_LIST_FILE)
+        try:
+            df_list = pd.read_csv(MONITORING_LIST_FILE, encoding='utf-8')
+        except UnicodeDecodeError:
+            print("UTF-8 decode failed, trying cp950...")
+            df_list = pd.read_csv(MONITORING_LIST_FILE, encoding='cp950')
+        
         items = df_list['ItemName'].tolist()
     except FileNotFoundError:
         print(f"Error: {MONITORING_LIST_FILE} not found.")
