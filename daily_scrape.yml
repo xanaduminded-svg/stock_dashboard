@@ -1,0 +1,39 @@
+name: Daily Scrape
+
+on:
+  schedule:
+    # Cron syntax: minute hour day month day_of_week
+    # Taiwan is UTC+8. We want 07:05 Taiwan time.
+    # 07:05 - 8 hours = previous day 23:05 UTC.
+    - cron: '5 23 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  scrape_and_commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Important: allows the action to push changes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas
+
+      - name: Run scraper
+        run: python scraper.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add history_data.csv
+          git commit -m "Auto-update data: $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          git push
