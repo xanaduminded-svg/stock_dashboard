@@ -21,7 +21,12 @@ def main():
             print("UTF-8 decode failed, trying cp950...")
             df_list = pd.read_csv(MONITORING_LIST_FILE, encoding='cp950')
         
-        items = df_list['ItemName'].tolist()
+        print(f"Columns found: {df_list.columns.tolist()}")
+        if 'ItemName' in df_list.columns:
+            items = df_list['ItemName'].tolist()
+        else:
+            print("Warning: 'ItemName' column not found. Using the first column as item list.")
+            items = df_list.iloc[:, 0].tolist()
     except FileNotFoundError:
         print(f"Error: {MONITORING_LIST_FILE} not found.")
         return
@@ -37,10 +42,31 @@ def main():
     
     print(f"Generating data for {timestamp_str}...")
     for item in items:
-        # Generate a random value between 10 and 500
-        # In a real scenario, this would be a scraped value
-        value = round(random.uniform(10, 500), 2)
+        # Generate varied simulated data based on item keywords
+        value = get_simulated_value(item)
         new_data[item] = value
+
+def get_simulated_value(item_name):
+    item_lower = item_name.lower()
+    
+    # 1. Rates / Yields (Percentage-like low numbers)
+    if any(k in item_lower for k in ['yield', 'rate', '殖利率', '利差', 'spread']):
+        return round(random.uniform(1.5, 5.5), 2)
+    
+    # 2. Ratios / VIX (Mid-range numbers)
+    if any(k in item_lower for k in ['pe', 'ratio', 'vix', '本益比']):
+        return round(random.uniform(10, 40), 2)
+        
+    # 3. Oscillators / 0-100 Indicators
+    if any(k in item_lower for k in ['rsi', 'fear', 'greed', '乖離', 'bias', 'sentiment', '情緒']):
+        return round(random.uniform(20, 80), 2)
+        
+    # 4. Large Indices (Thousands) - optional, but user mentioned "Stock"
+    # If the user didn't specificy indices, keeping it simple is safer, 
+    # but let's assume default is 0-100 to be safe for unknown types, or keep the 10-500 from before but narrower.
+    
+    # Default fallback
+    return round(random.uniform(10, 150), 2)
 
     # Convert to DataFrame (single row)
     df_new = pd.DataFrame([new_data])
