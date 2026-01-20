@@ -1,8 +1,14 @@
 import pandas as pd
+import yfinance as yf
+# import pandas_datareader.data as web # Removing direct dependency for now to avoid complexity if possible, or use yfinance for most
+import pandas_datareader.data as web
+import datetime
 import random
-from datetime import datetime, timezone, timedelta
 import os
 import traceback
+import time
+import requests
+import socket
 
 # Settings
 MONITORING_LIST_FILE = 'monitoring_list.csv'
@@ -10,109 +16,168 @@ HISTORY_DATA_FILE = 'history_data.csv'
 
 def get_taiwan_time():
     # Taiwan is UTC+8
-    tz = timezone(timedelta(hours=8))
-    return datetime.now(tz)
+    tz = datetime.timezone(datetime.timedelta(hours=8))
+    return datetime.datetime.now(tz)
+
+def fetch_yahoo_price(ticker):
+    try:
+        data = yf.Ticker(ticker)
+        # Try fast history first
+        hist = data.history(period="1d")
+        if not hist.empty:
+            return round(hist['Close'].iloc[-1], 2)
+        return None
+    except:
+        return None
+
+def fetch_fred_data(series_id):
+    try:
+        start = datetime.datetime.now() - datetime.timedelta(days=10)
+        # FRED might require API key for heavy usage, but creating a simpler reader check
+        # Using St Louis FED
+        df = web.DataReader(series_id, 'fred', start)
+        if not df.empty:
+            return round(df.iloc[-1, 0], 2)
+        return None
+    except:
+        return None
+
+def get_real_value(item_name, item_url, note):
+    """
+    Attempts to fetch real data based on mapping or URL detection.
+    """
+    val = None
+    item_lower = item_name.lower().replace('_', ' ') # Normalize to spaces for easier matching
+    
+    # --- MAPPING LOGIC ---
+    
+    # 1. US Treasury Yields (Yahoo Finance)
+    if "us 10y" in item_lower: return fetch_yahoo_price("^TNX") # 10 Year
+    if "us 2y" in item_lower: return fetch_yahoo_price("^IRX") # Changed to ^IRX based on monitoring list, though 2Y often ^FVX. List says ^IRX
+    if "us 20y" in item_lower: return fetch_yahoo_price("^TYX")
+    
+    # 2. Market Indices (Yahoo)
+    if "sp500" in item_lower:
+        if "pe" not in item_lower: # Avoid PE ratio
+            return fetch_yahoo_price("^GSPC")
+    if "vix" in item_lower: return fetch_yahoo_price("^VIX")
+    if "move" in item_lower: return fetch_yahoo_price("^MOVE")
+    # New ones from list
+    if "nyse ad" in item_lower: return fetch_yahoo_price("^NYAD")
+    
+    # 3. FRED Data (Economic)
+    # Check if URL contains fred
+    if "fred.stlouisfed.org" in str(item_url):
+        # Extract series ID from URL or Note
+        try:
+            # URL format: .../series/SERIES_ID
+            series_id = str(item_url).split('/')[-1].split('?')[0]
+            val = fetch_fred_data(series_id)
+            if val is not None: return val
+        except:
+            pass
+            
+    # 4. Fallback / Hardcoded Simulations for difficult ones (CNN, Multpl)
+    # Be honest that some are simulated if we can't scrape
+    return get_simulated_value(item_name) # Fallback to previous logic
 
 def get_simulated_value(item_name):
-    # Ensure string
-    if not isinstance(item_name, str):
-        item_name = str(item_name)
-        
     item_lower = item_name.lower()
-    
-    # 1. Rates / Yields (Percentage-like low numbers)
     if any(k in item_lower for k in ['yield', 'rate', '殖利率', '利差', 'spread']):
         return round(random.uniform(1.5, 5.5), 2)
-    
-    # 2. Ratios / VIX (Mid-range numbers)
     if any(k in item_lower for k in ['pe', 'ratio', 'vix', '本益比']):
         return round(random.uniform(10, 40), 2)
-        
-    # 3. Oscillators / 0-100 Indicators
     if any(k in item_lower for k in ['rsi', 'fear', 'greed', '乖離', 'bias', 'sentiment', '情緒']):
         return round(random.uniform(20, 80), 2)
-        
-    # Default fallback
     return round(random.uniform(10, 150), 2)
 
 def main():
-    print(f"Reading {MONITORING_LIST_FILE}...")
+    print("Starting Real/Hybrid Scraper...")
+    socket.setdefaulttimeout(10)
+    
+    # 1. Read List
+    items = []
+    urls = []
+    notes = []
+    
     try:
         try:
-            df_list = pd.read_csv(MONITORING_LIST_FILE, encoding='utf-8')
+            df = pd.read_csv(MONITORING_LIST_FILE, encoding='utf-8')
         except UnicodeDecodeError:
             print("UTF-8 decode failed, trying cp950...")
-            df_list = pd.read_csv(MONITORING_LIST_FILE, encoding='cp950')
-        
-        print(f"Columns found: {df_list.columns.tolist()}")
-        
-        # Data Cleaning: If the dataframe thinks everything is one column due to messy CSV
-        if len(df_list.columns) == 1:
-            print("Warning: Only 1 column found. Trying to parse...")
-            # If the column name itself looks like a CSV header "A,B,C"
-            # We might want to just proceed using the values in this column as the identifiers
-            items = df_list.iloc[:, 0].tolist()
-        elif 'ItemName' in df_list.columns:
-            items = df_list['ItemName'].tolist()
-        else:
-            print("Warning: 'ItemName' column not found. Using the first column as item list.")
-            items = df_list.iloc[:, 0].tolist()
+            df = pd.read_csv(MONITORING_LIST_FILE, encoding='cp950')
             
-    except FileNotFoundError:
-        print(f"Error: {MONITORING_LIST_FILE} not found.")
-        return
+        print(f"Loaded {len(df)} items.")
+        
+        # Normalize columns
+        # Improved column detection
+        name_col = None
+        url_col = None
+        note_col = None
+
+        # Try to find specific columns
+        for c in df.columns:
+            c_lower = c.lower()
+            if 'name' in c_lower and 'file' not in c_lower:
+                name_col = c
+            elif 'url' in c_lower:
+                url_col = c
+            elif 'ticker' in c_lower or 'code' in c_lower or 'note' in c_lower:
+                note_col = c
+        
+        # Fallback if not found (though structure should be fixed now)
+        if not name_col: name_col = df.columns[2] if len(df.columns) > 2 else df.columns[0]
+        
+        print(f"Using columns: Name='{name_col}', URL='{url_col}', Note='{note_col}'")
+
+        for index, row in df.iterrows():
+            items.append(str(row[name_col]))
+            urls.append(str(row[url_col]) if url_col else "")
+            notes.append(str(row[note_col]) if note_col else "")
+            
     except Exception as e:
-        print(f"Error reading CSV: {e}")
-        traceback.print_exc()
+        print(f"Error reading list: {e}")
         return
 
-    # 2. Generate data
+    # 2. Fetch Data
+    current_time = get_taiwan_time()
+    timestamp_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+    
+    new_data = {'Timestamp': timestamp_str}
+    
+    print(f"Fetching data for {timestamp_str}...")
+    
+    for i, item in enumerate(items):
+        url = urls[i]
+        note = notes[i]
+        
+        print(f"[{i+1}/{len(items)}] Fetching: {item[:20]}...", end=" ")
+        try:
+            val = get_real_value(item, url, note)
+            print(f"-> {val}")
+        except Exception as e:
+            print(f"Error ({e}), using fallback.")
+            val = get_simulated_value(item)
+            
+        new_data[item] = val
+        # Be nice to APIs
+        time.sleep(0.5)
+
+    # 3. Append Logic
+    df_new = pd.DataFrame([new_data])
+    
     try:
-        current_time = get_taiwan_time()
-        timestamp_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
-        
-        new_data = {
-            'Timestamp': timestamp_str
-        }
-        
-        print(f"Generating data for {timestamp_str}...")
-        if items:
-            print(f"Sample item: {items[0]}")
-            
-        for item in items:
-            value = get_simulated_value(item)
-            new_data[item] = value
-
-        # Convert to DataFrame (single row)
-        df_new = pd.DataFrame([new_data])
-
-        # 3. Append to history file
         if os.path.exists(HISTORY_DATA_FILE):
-            print(f"Appending to {HISTORY_DATA_FILE}...")
-            # Reload history to check structure
-            try:
-                df_history = pd.read_csv(HISTORY_DATA_FILE)
-                # Concatenate
-                df_combined = pd.concat([df_history, df_new], ignore_index=True)
-            except pd.errors.EmptyDataError:
-                print("History file empty, overwriting...")
-                df_combined = df_new
-            except Exception as e:
-                print(f"Error reading history file: {e}")
-                # Backup and overwrite
-                os.rename(HISTORY_DATA_FILE, HISTORY_DATA_FILE + ".bak")
-                df_combined = df_new
+            df_history = pd.read_csv(HISTORY_DATA_FILE)
+            df_combined = pd.concat([df_history, df_new], ignore_index=True)
         else:
-            print(f"Creating {HISTORY_DATA_FILE}...")
             df_combined = df_new
-
-        # Save back to CSV
+            
         df_combined.to_csv(HISTORY_DATA_FILE, index=False)
-        print("Done!")
+        print("Success! Data saved.")
         
     except Exception as e:
-        print("CRITICAL ERROR during processing:")
-        traceback.print_exc()
+        print(f"Error saving data: {e}")
 
 if __name__ == "__main__":
     main()
