@@ -111,29 +111,23 @@ def main():
         
         # Normalize columns
         # Improved column detection
-        name_col = None
-        url_col = None
-        note_col = None
+        name_zh_col = 'name_zh'
+        name_col = 'name'
+        url_col = 'url'
+        note_col = 'ticker_code'
 
-        # Try to find specific columns
-        for c in df.columns:
-            c_lower = c.lower()
-            if 'name' in c_lower and 'file' not in c_lower:
-                name_col = c
-            elif 'url' in c_lower:
-                url_col = c
-            elif 'ticker' in c_lower or 'code' in c_lower or 'note' in c_lower:
-                note_col = c
+        # Optional: dynamic detection if needed, but we just rewrote the file with specific headers.
+        # Let's keep it simple and trust our rewrite.
         
-        # Fallback if not found (though structure should be fixed now)
-        if not name_col: name_col = df.columns[2] if len(df.columns) > 2 else df.columns[0]
-        
-        print(f"Using columns: Name='{name_col}', URL='{url_col}', Note='{note_col}'")
+        print(f"Using columns: NameZH='{name_zh_col}', Name='{name_col}', URL='{url_col}'")
 
         for index, row in df.iterrows():
-            items.append(str(row[name_col]))
-            urls.append(str(row[url_col]) if url_col else "")
-            notes.append(str(row[note_col]) if note_col else "")
+            items.append({
+                'zh': str(row[name_zh_col]),
+                'en': str(row[name_col]),
+                'url': str(row[url_col]),
+                'note': str(row[note_col])
+            })
             
     except Exception as e:
         print(f"Error reading list: {e}")
@@ -147,19 +141,21 @@ def main():
     
     print(f"Fetching data for {timestamp_str}...")
     
-    for i, item in enumerate(items):
-        url = urls[i]
-        note = notes[i]
+    for i, item_obj in enumerate(items):
+        name_zh = item_obj['zh']
+        name_en = item_obj['en']
+        url = item_obj['url']
+        note = item_obj['note']
         
-        print(f"[{i+1}/{len(items)}] Fetching: {item[:20]}...", end=" ")
+        print(f"[{i+1}/{len(items)}] Fetching: {name_zh[:15]}...", end=" ")
         try:
-            val = get_real_value(item, url, note)
+            val = get_real_value(name_en, url, note)
             print(f"-> {val}")
         except Exception as e:
             print(f"Error ({e}), using fallback.")
-            val = get_simulated_value(item)
+            val = get_simulated_value(name_en)
             
-        new_data[item] = val
+        new_data[name_zh] = val
         # Be nice to APIs
         time.sleep(0.5)
 

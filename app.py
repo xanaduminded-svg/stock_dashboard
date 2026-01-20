@@ -103,3 +103,7 @@ else:
         
         with st.expander("Or view all trends at once (messy for many items)"):
             st.line_chart(df)
+
+    # 4. Footer with Dashboard URL
+    st.divider()
+    st.markdown(f"**Dashboard URL:** [http://localhost:8501](http://localhost:8501)")
